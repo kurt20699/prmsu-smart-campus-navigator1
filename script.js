@@ -967,7 +967,6 @@ function getCampusUserLocation(campus) {
 const state = {
     map: null,
     currentCampus: null,
-    currentUser: null, 
     markers: [],
     routeLine: null,
     dashedOverlay: null,
@@ -1553,49 +1552,6 @@ function setupAuthHandlers() {
     });
 }
 
-function applyRolePrivileges(role) {
-    const privileges = {
-        visitor:  { roomFinder: false, alerts: false, manageAlerts: false, userManagement: false },
-        student:  { roomFinder: true,  alerts: false, manageAlerts: false, userManagement: false },
-        employee: { roomFinder: true,  alerts: true,  manageAlerts: true,  userManagement: false },
-        admin:    { roomFinder: true,  alerts: true,  manageAlerts: true,  userManagement: true  }
-    };
-
-    const p = privileges[role.toLowerCase()] || privileges['visitor'];
-
-    // ✅ Room Finder button
-    const roomFinderBtn = document.getElementById('roomFinderBtn');
-    if (roomFinderBtn) {
-        roomFinderBtn.style.display = p.roomFinder ? '' : 'none';
-    }
-
-    // ✅ Campus Alerts
-    const alertBanner = document.getElementById('alertBanner');
-    if (alertBanner) {
-        alertBanner.style.display = p.alerts ? '' : 'none';
-    }
-
-    // ✅ Admin Panel button
-    const adminPanelBtn = document.getElementById('adminPanelBtn');
-    if (adminPanelBtn) {
-        adminPanelBtn.style.display = p.userManagement ? '' : 'none';
-    }
-
-    // ✅ Role badge
-    const roleBadge = document.getElementById('userRoleBadge');
-    if (roleBadge) {
-        const colors = {
-            visitor: '#888',
-            student: '#2c5aa0',
-            employee: '#34a853',
-            admin: '#ea4335'
-        };
-        roleBadge.textContent = role.toUpperCase();
-        roleBadge.style.background = colors[role.toLowerCase()] || '#888';
-        roleBadge.style.display = '';
-    }
-}
-
 function startAppAfterAuth() {
     document.getElementById('authScreen')?.classList.add('hidden');
     showLoadingScreen();
@@ -1610,14 +1566,6 @@ function startAppAfterAuth() {
             hideLoadingScreen();
             loadCampus('iba');
             updateUserRoleBadge();
-                
-             // ✅ Apply role privileges
-            const session = getAuthSession();
-            if (session?.role) {
-                state.currentUser = session;
-                applyRolePrivileges(session.role);
-            }
-            
             console.log('Initialization complete!');
         } catch (error) {
             console.error('Error during initialization:', error);
@@ -4631,115 +4579,6 @@ function showSavedLocations() {
     
     resultsDiv.classList.remove('hidden');
 }
-
-async function openAdminPanel() {
-    if (state.currentUser?.role?.toUpperCase() !== 'ADMIN') return;
-
-    const res = await fetch('/api/users', {
-        headers: { 'x-user-role': state.currentUser.role }
-    });
-    const data = await res.json();
-    if (!data.ok) {
-        showNotification('Failed to load users', 'error');
-        return;
-    }
-
-    const rows = data.users.map(u => `
-        <tr>
-            <td style="padding: 8px; border-bottom: 1px solid #eee;">${u.full_name}</td>
-            <td style="padding: 8px; border-bottom: 1px solid #eee;">${u.email}</td>
-            <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                <select onchange="updateUserRole('${u.user_id}', this.value)" style="
-                    padding: 4px 8px;
-                    border-radius: 6px;
-                    border: 1px solid #ddd;
-                    font-size: 12px;
-                ">
-                    ${['STUDENT','EMPLOYEE','VISITOR','ADMIN'].map(r => `
-                        <option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>
-                    `).join('')}
-                </select>
-            </td>
-        </tr>
-    `).join('');
-
-    // Remove existing modal if any
-    const existing = document.getElementById('adminPanelModal');
-    if (existing) existing.remove();
-
-    const panel = document.createElement('div');
-    panel.id = 'adminPanelModal';
-    panel.style.cssText = `
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0,0,0,0.5);
-        z-index: 9999;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    `;
-    panel.innerHTML = `
-        <div style="
-            background: white;
-            border-radius: 14px;
-            width: 90%;
-            max-width: 600px;
-            max-height: 80vh;
-            overflow-y: auto;
-            padding: 20px;
-        ">
-            <div style="
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 16px;
-            ">
-                <h2 style="margin: 0; color: #ea4335;">⚙️ Admin Panel — User Management</h2>
-                <button onclick="document.getElementById('adminPanelModal').remove()" style="
-                    background: none;
-                    border: none;
-                    font-size: 20px;
-                    cursor: pointer;
-                ">✕</button>
-            </div>
-            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-                <thead>
-                    <tr style="background: #f5f5f5;">
-                        <th style="padding: 8px; text-align: left;">Name</th>
-                        <th style="padding: 8px; text-align: left;">Email</th>
-                        <th style="padding: 8px; text-align: left;">Role</th>
-                    </tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>
-        </div>
-    `;
-
-    // Close when clicking outside
-    panel.addEventListener('click', (e) => {
-        if (e.target === panel) panel.remove();
-    });
-
-    document.body.appendChild(panel);
-}
-
-async function updateUserRole(userId, newRole) {
-    const res = await fetch(`/api/users/${userId}/role`, {
-        method: 'PATCH',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-user-role': state.currentUser.role
-        },
-        body: JSON.stringify({ role: newRole })
-    });
-    const data = await res.json();
-    if (data.ok) {
-        showNotification(`Role updated to ${newRole}`, 'success');
-    } else {
-        showNotification('Failed to update role', 'error');
-    }
-}
-
 
 // Initialize on load
 document.addEventListener('DOMContentLoaded', init);
