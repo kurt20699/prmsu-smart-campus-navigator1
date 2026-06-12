@@ -504,6 +504,39 @@ app.get("/api/datasets", async (_req, res) => {
   }
 });
 
+// ✅ Role middleware
+function requireRole(...roles) {
+    return (req, res, next) => {
+        const userRole = req.headers['x-user-role'];
+        if (!userRole || !roles.includes(userRole)) {
+            return res.status(403).json({ ok: false, error: 'Access denied' });
+        }
+        next();
+    };
+}
+
+// ✅ Get all users (admin only)
+app.get('/api/users', requireRole('ADMIN'), async (req, res) => {
+    const result = await pool.query(
+        'SELECT user_id, full_name, email, role FROM users ORDER BY created_at DESC'
+    );
+    res.json({ ok: true, users: result.rows });
+});
+
+// ✅ Update user role (admin only)
+app.patch('/api/users/:id/role', requireRole('ADMIN'), async (req, res) => {
+    const { role } = req.body;
+    const allowedRoles = ['STUDENT', 'EMPLOYEE', 'VISITOR', 'ADMIN'];
+    if (!allowedRoles.includes(role)) {
+        return res.status(400).json({ ok: false, error: 'Invalid role' });
+    }
+    await pool.query(
+        'UPDATE users SET role = $1 WHERE user_id = $2',
+        [role, req.params.id]
+    );
+    res.json({ ok: true });
+});
+
 app.listen(port, () => {
   console.log(`Neon API running on http://localhost:${port}`);
 });
