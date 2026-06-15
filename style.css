@@ -891,8 +891,8 @@ body {
 }
 
 .center-map-btn {
-    width: 48px;
-    height: 48px;
+    width: 52px;
+    height: 52px;
     padding: 0;
     border-radius: 50%;
     background: var(--primary-blue);
@@ -1013,18 +1013,19 @@ body {
     top: 50%;
     left: 50%;
     background: white;
-    padding: 20px;
-    border-radius: 12px;
+    padding: 0;
+    border-radius: 14px;
     box-shadow: var(--shadow-lg);
     width: min(400px, 90vw);
-    height: min(55vh, 420px);
+    max-height: min(85vh, 650px);
+    height: auto;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     z-index: 1000;
     transform: translate(-50%, -50%);
+    border: 1px solid #e4e9f0;
 }
-
 .route-header {
     display: flex;
     justify-content: space-between;
@@ -1239,7 +1240,8 @@ button {
 .mobile-menu-toggle {
     position: fixed;
     bottom: calc(24px + env(safe-area-inset-bottom));
-    left: 16px;
+    right: 12px;        /* ✅ changed from left: 16px */
+    left: auto;         /* ✅ remove left positioning */
     width: 52px;
     height: 52px;
     background: var(--primary-blue);
@@ -1594,10 +1596,19 @@ body.sidebar-open {
     flex: 1;
     min-height: 0;
 }
+#msProgressBar {
+    flex-shrink: 0;
+    max-height: 150px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
 #routeDetails {
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+    padding: 10px 14px;
+    -webkit-overflow-scrolling: touch;
 }
 .route-directions > strong {
     display: block;
@@ -1898,30 +1909,40 @@ path.dotted-end-line {
 }
 
 /* Mobile responsive */
-@media (max-width: 768px) {
-    .route-info-card {
-        height: min(60vh, 360px);
+    @media (max-width: 768px) {
+    #msProgressBar {
+        max-height: 120px;
+        overflow-y: auto;
+        flex-shrink: 0;
     }
-    
-    .route-stat {
-        font-size: 13px;
+
+    #msStopNames {
+        max-height: 80px;
+        overflow-y: auto;
+    }
+
+    #routeDetails {
+        overflow-y: auto;
+        flex: 1;
+        min-height: 0;
         padding: 8px 12px;
+        -webkit-overflow-scrolling: touch;
     }
-    
-    .step-number {
-        min-width: 26px;
-        height: 26px;
-        font-size: 12px;
+
+    .route-header {
+        flex-shrink: 0;
+        padding: 10px 12px;
+        margin-bottom: 0;
     }
-    
-    .step-text {
-        font-size: 13px;
+
+    /* Fixed sections that should never scroll */
+    #msArrivedSection,
+    #msAddStopWrapper,
+    #msOfflineBanner {
+        flex-shrink: 0;
     }
-    
-    .route-directions {
-        max-height: 300px;
-    }
-}
+}   
+
 
 /* Route info card actions */
 .route-header {
@@ -2008,25 +2029,72 @@ path.dotted-end-line {
 /* Mobile adjustments */
 @media (max-width: 768px) {
     .route-info-card {
-        max-height: 60vh;
+        position: fixed;
+        left: 50%;
+        bottom: calc(80px + env(safe-area-inset-bottom));
+        top: auto;
+        transform: translateX(-50%);
+        width: min(380px, 94vw);
+        max-height: 55vh;
+        height: auto;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border-radius: 14px;
+    }
+
+    #msProgressBar {
+        max-height: 120px;
+        overflow-y: auto;
+        flex-shrink: 0;
+    }
+
+    #msStopNames {
+        max-height: 80px;
         overflow-y: auto;
     }
-    
+
+    #routeDetails {
+        overflow-y: auto;
+        flex: 1;
+        min-height: 0;
+        padding: 8px 12px;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .route-header {
+        flex-shrink: 0;
+        padding: 10px 12px;
+        margin-bottom: 0;
+    }
+
+    #msArrivedSection,
+    #msAddStopWrapper,
+    #msOfflineBanner {
+        flex-shrink: 0;
+    }
+
     .route-stat {
         font-size: 13px;
         padding: 6px 10px;
     }
-    
+
     .step-number {
         min-width: 24px;
         height: 24px;
         font-size: 12px;
     }
-    
+
     .step-text {
         font-size: 12px;
     }
+
+    .route-directions {
+        max-height: 300px;
+    }
 }
+    
 @keyframes markerPulseAnim {
     0% {
         transform: scale(0.8);
@@ -2178,13 +2246,13 @@ path.dotted-end-line {
 
     .mobile-menu-toggle {
         display: flex;
-        width: 56px;
-        height: 56px;
+        width: 52px;
+        height: 52px;
     }
 
     .map-controls {
-        top: auto;
-        bottom: calc(16px + env(safe-area-inset-bottom));
+        top: 0px;
+        bottom: auto;
         right: 12px;
     }
 
@@ -2213,45 +2281,36 @@ path.dotted-end-line {
     }
 
     .center-map-btn {
-        width: 48px;
-        height: 48px;
+        position: fixed !important;
+        bottom: calc(88px + env(safe-area-inset-bottom));
+        right: 12px;
+        top: auto;
+        width: 52px;
+        height: 52px;
         font-size: 20px;
     }
-
     .building-panel {
-        top: auto;
-        bottom: calc(90px + env(safe-area-inset-bottom));
-        left: 12px;
-        right: 12px;
-        width: auto;
-        max-height: min(45vh, 360px);
+        top: 56px;
+        bottom: auto;
+        left: auto;        /* ✅ remove left positioning */
+        right: 12px;       /* ✅ align to right side */
+        width: min(220px, 84vw);
+        max-height: min(60vh, 470px);
     }
 
     .building-panel-open .building-panel {
-        bottom: calc(110px + env(safe-area-inset-bottom));
+        top: 46px;
     }
 
     .building-panel-list {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
     }
-
+    
     .building-card-image {
-        height: clamp(70px, 28vw, 100px);
+        height: 100px;
     }
-
-    .route-info-card {
-        left: 50%;
-        right: auto;
-        bottom: calc(16px + env(safe-area-inset-bottom));
-        width: min(360px, 92vw);
-        padding: 14px;
-        height: min(42vh, 320px);
-        top: auto;
-        transform: translateX(-50%);
-    }
-
     .route-header h3 {
         font-size: 14px;
     }

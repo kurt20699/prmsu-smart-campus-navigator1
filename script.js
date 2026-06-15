@@ -967,6 +967,14 @@ function getCampusUserLocation(campus) {
 const state = {
     map: null,
     currentCampus: null,
+        // ✅ NEW Multi-stop v2
+    multiStop: {
+        active: false,
+        stops: [],           // { location, status: 'pending'|'current'|'done', cachedRoute: null }
+        currentIndex: 0,
+        countdownTimer: null,
+        arrivalChecker: null
+    },  
     markers: [],
     routeLine: null,
     dashedOverlay: null,
@@ -2976,8 +2984,9 @@ function handleSearch() {
     const results = [];
     
     campus.locations.forEach(building => {
-        // Search building names
-        if (building.name.toLowerCase().includes(query)) {
+        // Search building names and short names
+        if (building.name.toLowerCase().includes(query) ||
+            (building.shortName && building.shortName.toLowerCase().includes(query))) {
             results.push({ 
                 ...building, 
                 matchType: 'building',
@@ -3750,6 +3759,8 @@ async function navigateToSelected() {
         const routes = e.routes;
         const route = routes[0];
         
+        msActivate(destination);
+        
         // Store route data
         state.currentRoute = {
             coordinates: route.coordinates,
@@ -4271,6 +4282,10 @@ function minimizeRoutePanel() {
 
 // Complete route removal
 function clearRouteCompletely() {
+
+    // ✅ Reset multi-stop v2
+    msClearArrivalCheck();
+    msInit();
     // Remove routing control
     if (state.routingControl) {
         state.map.removeControl(state.routingControl);
@@ -4409,6 +4424,65 @@ function handleQuickAction(action) {
         case 'savedLocations':
             showSavedLocations();
             break;
+    }
+}
+
+let html5QrScanner = null;
+
+function openQrScanner() {
+    document.getElementById('qrScannerModal').style.display = 'flex';
+
+    html5QrScanner = new Html5Qrcode("qrScannerView");
+    html5QrScanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 220, height: 220 } },
+        (decodedText) => {
+            alert('Scanned: ' + decodedText); // ← temporary debug
+            handleQrResult(decodedText);
+        },
+        (error) => { /* ignore scan errors */ }
+    );
+}
+
+function closeQrScanner() {
+    if (html5QrScanner) {
+        html5QrScanner.stop().then(() => {
+            html5QrScanner.clear();
+            html5QrScanner = null;
+        });
+    }
+    document.getElementById('qrScannerModal').style.display = 'none';
+}
+
+function handleQrResult(text) {
+    closeQrScanner();
+
+    try {
+        const data = JSON.parse(text);
+        const campus = campusData[data.campus];
+        if (!campus) throw new Error("Unknown campus");
+
+        const location = campus.locations.find(l => l.id === data.buildingId);
+        if (!location) throw new Error("Unknown building");
+
+        // Switch campus if needed
+        if (data.campus !== state.currentCampus) {
+            switchCampus(data.campus);
+        }
+
+        // Set user location to scanned building
+        state.userLocation = { ...location.coords };
+        map.setView([location.coords.lat, location.coords.lng], 19);
+
+        showNotification(`📍 You are at: ${location.name}${data.floor ? ' — ' + data.floor : ''}`, 'success');
+
+        // Optional: highlight the building on map
+        if (state.selectedBuilding?.id !== location.id) {
+            selectBuilding(location);
+        }
+
+    } catch (e) {
+        showNotification('❌ Invalid QR code. Please try again.', 'error');
     }
 }
 
@@ -4579,6 +4653,513 @@ function showSavedLocations() {
     
     resultsDiv.classList.remove('hidden');
 }
+
+// ============================================
+// 🆕 MULTI-STOP NAVIGATION V2
+// ============================================
+
+function msInit() {
+    state.multiStop = {
+        active: false,
+        stops: [],
+        currentIndex: 0,
+        countdownTimer: null,
+        arrivalChecker: null
+    };
+    document.getElementById('msProgressBar').style.display = 'none';
+    document.getElementById('msArrivedSection').style.display = 'none';
+    document.getElementById('msOfflineBanner').style.display = 'none';
+    document.getElementById('msCountdownBanner').style.display = 'none';
+}
+
+function msActivate(destination) {
+    // Called when navigation starts
+    if (!state.multiStop.active) {
+        state.multiStop.active = true;
+        state.multiStop.stops = [{
+            location: destination,
+            status: 'current',
+            cachedRoute: null
+        }];
+        state.multiStop.currentIndex = 0;
+    }
+    msRenderProgress();
+    msStartArrivalCheck(destination);
+}
+
+function msRenderProgress() {
+    const ms = state.multiStop;
+    if (!ms.active || ms.stops.length === 0) {
+        document.getElementById('msProgressBar').style.display = 'none';
+        return;
+    }
+
+    document.getElementById('msProgressBar').style.display = 'block';
+
+    const total = ms.stops.length;
+    const current = ms.currentIndex;
+
+    // Update counter
+    document.getElementById('msStopCount').textContent =
+        `Stop ${current + 1} of ${total}`;
+
+    // Build step indicator (dots connected by lines)
+    const indicator = document.getElementById('msStepIndicator');
+    indicator.innerHTML = ms.stops.map((stop, i) => {
+        const isDone = stop.status === 'done';
+        const isCurrent = stop.status === 'current';
+        const isPending = stop.status === 'pending';
+
+        const dotColor = isDone ? '#34a853' : isCurrent ? '#2c5aa0' : '#ccc';
+        const dotBorder = isCurrent ? '3px solid #2c5aa0' : 'none';
+        const lineColor = isDone ? '#34a853' : '#e0e0e0';
+
+        return `
+            <div style="display:flex; align-items:center; flex:1;">
+                <div style="
+                    width:${isCurrent ? '16px' : '12px'};
+                    height:${isCurrent ? '16px' : '12px'};
+                    border-radius:50%;
+                    background:${dotColor};
+                    border:${dotBorder};
+                    flex-shrink:0;
+                    transition: all 0.3s;
+                    ${isCurrent ? 'box-shadow:0 0 0 4px rgba(44,90,160,0.2);' : ''}
+                "></div>
+                ${i < ms.stops.length - 1 ? `
+                    <div style="
+                        flex:1;
+                        height:3px;
+                        background:${lineColor};
+                        transition: background 0.3s;
+                    "></div>
+                ` : ''}
+            </div>
+        `;
+    }).join('');
+
+    // Build stop names list
+    const namesList = document.getElementById('msStopNames');
+    namesList.innerHTML = ms.stops.map((stop, i) => {
+        const isDone = stop.status === 'done';
+        const isCurrent = stop.status === 'current';
+
+        return `
+            <div style="
+                display:flex;
+                align-items:center;
+                gap:8px;
+                padding:6px 8px;
+                border-radius:8px;
+                background:${isCurrent ? '#e8f0fe' : 'transparent'};
+                opacity:${isDone ? '0.5' : '1'};
+            ">
+                <span style="
+                    font-size:11px;
+                    font-weight:700;
+                    color:${isDone ? '#34a853' : isCurrent ? '#2c5aa0' : '#999'};
+                    width:16px;
+                    text-align:center;
+                ">${isDone ? '✓' : i + 1}</span>
+                <span style="
+                    font-size:12px;
+                    font-weight:${isCurrent ? '600' : '400'};
+                    color:${isCurrent ? '#2c5aa0' : isDone ? '#666' : '#888'};
+                    flex:1;
+                ">${stop.location.name}</span>
+                ${stop.cachedRoute ? `
+                    <span style="
+                        font-size:10px;
+                        background:#e8f5e9;
+                        color:#2e7d32;
+                        padding:2px 6px;
+                        border-radius:10px;
+                        font-weight:600;
+                    ">📥 Cached</span>
+                ` : ''}
+                ${stop.status === 'pending' ? `
+                    <button onclick="msRemoveStop(${i})" style="
+                        background:none;
+                        border:none;
+                        color:#ea4335;
+                        cursor:pointer;
+                        font-size:13px;
+                        padding:0 2px;
+                    ">✕</button>
+                ` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+function msOpenAddStop() {
+    const modal = document.getElementById('msAddStopModal');
+    modal.style.display = 'flex';
+    document.getElementById('msStopSearchInput').value = '';
+    document.getElementById('msStopSearchResults').innerHTML = '';
+    setTimeout(() => document.getElementById('msStopSearchInput').focus(), 100);
+}
+
+function msCloseAddStop() {
+    document.getElementById('msAddStopModal').style.display = 'none';
+}
+
+function msSearchStop(query) {
+    const resultsDiv = document.getElementById('msStopSearchResults');
+    if (!query || query.trim().length < 1) {
+        resultsDiv.innerHTML = '';
+        return;
+    }
+
+    const campus = campusData[state.currentCampus];
+    const existing = state.multiStop.stops.map(s => s.location.id);
+    const q = query.toLowerCase();
+    const results = [];
+
+    // Search buildings
+    campus.locations.forEach(loc => {
+        if (!existing.includes(loc.id) &&
+            (loc.name.toLowerCase().includes(q) ||
+            (loc.shortName && loc.shortName.toLowerCase().includes(q)))) {
+            results.push({
+                id: `building_${loc.id}`,
+                name: loc.name,
+                subtitle: loc.type,
+                icon: '🏢',
+                coords: loc.coords,
+                matchType: 'building'
+            });
+        }
+
+        // Search rooms inside each building
+        if (loc.rooms && Array.isArray(loc.rooms)) {
+            loc.rooms.forEach(room => {
+                if (room.name && room.name.toLowerCase().includes(q)) {
+                    results.push({
+                        id: `room_${loc.id}_${room.id}`,
+                        name: room.name,
+                        subtitle: `${loc.name} — ${room.floor}`,
+                        icon: '🚪',
+                        coords: room.coords,
+                        matchType: 'room',
+                        instructor: room.instructor || null
+                    });
+                }
+            });
+        }
+    });
+
+    if (results.length === 0) {
+        resultsDiv.innerHTML = `
+            <div style="padding:12px; color:#999; font-size:13px; text-align:center;">
+                No results found
+            </div>`;
+        return;
+    }
+
+    resultsDiv.innerHTML = results.slice(0, 10).map(item => `
+        <div onclick="msAddStopDirect(${JSON.stringify(item).replace(/"/g, '&quot;')})" style="
+            padding:10px 12px;
+            border:1px solid #e0e0e0;
+            border-radius:8px;
+            cursor:pointer;
+            display:flex;
+            align-items:center;
+            gap:10px;
+            transition:background 0.2s;
+            background:white;
+        "
+        onmouseover="this.style.background='#f0f7ff'"
+        onmouseout="this.style.background='white'">
+            <span style="font-size:18px;">${item.icon}</span>
+            <div>
+                <div style="font-weight:600; font-size:13px; color:#222;">${item.name}</div>
+                <div style="font-size:11px; color:#888;">${item.subtitle}</div>
+                ${item.instructor ? `<div style="font-size:11px; color:#9c27b0;">👨‍🏫 ${item.instructor}</div>` : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+async function msAddStopDirect(item) {
+    const location = {
+        id: item.id,
+        name: item.name,
+        coords: item.coords,
+        matchType: item.matchType
+    };
+
+    state.multiStop.stops.push({
+        location,
+        status: 'pending',
+        cachedRoute: null
+    });
+
+    msCloseAddStop();
+    showNotification(`📍 ${location.name} added as next stop`, 'success');
+
+    await msCacheRoute(location, state.multiStop.stops.length - 1);
+    msRenderProgress();
+}
+
+async function msCacheRoute(destination, stopIndex) {
+    let startCoords;
+
+    // Use previous stop as start if available
+    const prevStop = state.multiStop.stops[stopIndex - 1];
+    if (prevStop) {
+        startCoords = normalizeCoords(prevStop.location.coords);
+    } else if (state.userLocation) {
+        startCoords = [state.userLocation.lat, state.userLocation.lng];
+    } else {
+        const campus = campusData[state.currentCampus];
+        startCoords = [campus.center.lat, campus.center.lng];
+    }
+
+    const destCoords = normalizeCoords(destination.coords);
+    if (!destCoords || !startCoords) return;
+
+    try {
+        const url = `https://router.project-osrm.org/route/v1/foot/${startCoords[1]},${startCoords[0]};${destCoords[1]},${destCoords[0]}?overview=full&geometries=geojson&steps=true`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed');
+
+        const data = await response.json();
+        if (data.code !== 'Ok' || !data.routes.length) throw new Error('No route');
+
+        const route = data.routes[0];
+        state.multiStop.stops[stopIndex].cachedRoute = {
+            coordinates: route.geometry.coordinates.map(c => [c[1], c[0]]),
+            distance: route.distance,
+            duration: route.duration,
+            isFallback: false
+        };
+
+        showNotification(`📥 Route to ${destination.name} cached`, 'info');
+
+    } catch (err) {
+        // Fallback straight line
+        state.multiStop.stops[stopIndex].cachedRoute = {
+            coordinates: [startCoords, destCoords],
+            distance: calculateDistance(startCoords, destCoords),
+            duration: calculateDistance(startCoords, destCoords) / 1.4,
+            isFallback: true
+        };
+    }
+
+    msRenderProgress();
+}
+
+function msRemoveStop(index) {
+    if (state.multiStop.stops[index]?.status === 'current') return;
+    state.multiStop.stops.splice(index, 1);
+    msRenderProgress();
+    showNotification('Stop removed', 'info');
+}
+
+function msStartArrivalCheck(destination) {
+    msClearArrivalCheck();
+
+    const THRESHOLD = 25;
+    const destCoords = normalizeCoords(destination.coords);
+    if (!destCoords) return;
+
+    state.multiStop.arrivalChecker = setInterval(() => {
+        if (!state.userLocation) return;
+
+        const userCoords = [state.userLocation.lat, state.userLocation.lng];
+        const distance = calculateDistance(userCoords, destCoords);
+
+        // Show arrived button when within 50m
+        const arrivedSection = document.getElementById('msArrivedSection');
+        if (arrivedSection) {
+            arrivedSection.style.display = distance <= 50 ? 'block' : 'none';
+        }
+
+        // Trigger countdown when within 25m
+        if (distance <= THRESHOLD) {
+            msClearArrivalCheck();
+            msStartCountdown();
+        }
+
+    }, 3000);
+}
+
+function msClearArrivalCheck() {
+    if (state.multiStop.arrivalChecker) {
+        clearInterval(state.multiStop.arrivalChecker);
+        state.multiStop.arrivalChecker = null;
+    }
+    if (state.multiStop.countdownTimer) {
+        clearInterval(state.multiStop.countdownTimer);
+        state.multiStop.countdownTimer = null;
+    }
+}
+
+function msStartCountdown() {
+    let seconds = 5;
+    const banner = document.getElementById('msCountdownBanner');
+    const arrivedSection = document.getElementById('msArrivedSection');
+
+    if (!banner) return;
+
+    arrivedSection.style.display = 'block';
+    banner.style.display = 'block';
+
+    const nextStop = state.multiStop.stops[state.multiStop.currentIndex + 1];
+    const nextName = nextStop ? nextStop.location.name : null;
+
+    const update = () => {
+        banner.innerHTML = `
+            <div>You have arrived!</div>
+            <div style="font-size:18px; margin:4px 0;">${seconds}s</div>
+            ${nextName ? `<div style="font-size:11px; opacity:0.8;">Switching to ${nextName}...</div>` : ''}
+            <button onclick="msCancelCountdown()" style="
+                margin-top:6px;
+                background:rgba(255,255,255,0.2);
+                border:1px solid rgba(255,255,255,0.4);
+                color:white;
+                padding:4px 12px;
+                border-radius:6px;
+                font-size:11px;
+                cursor:pointer;
+            ">Cancel</button>
+        `;
+    };
+
+    update();
+
+    state.multiStop.countdownTimer = setInterval(() => {
+        seconds--;
+        if (seconds <= 0) {
+            clearInterval(state.multiStop.countdownTimer);
+            state.multiStop.countdownTimer = null;
+            banner.style.display = 'none';
+            msArrived();
+        } else {
+            update();
+        }
+    }, 1000);
+}
+
+function msCancelCountdown() {
+    if (state.multiStop.countdownTimer) {
+        clearInterval(state.multiStop.countdownTimer);
+        state.multiStop.countdownTimer = null;
+    }
+    document.getElementById('msCountdownBanner').style.display = 'none';
+    showNotification('Auto-switch cancelled — tap Arrived when ready', 'info');
+}
+
+async function msArrived() {
+    const ms = state.multiStop;
+    msClearArrivalCheck();
+
+    // Mark current stop as done
+    ms.stops[ms.currentIndex].status = 'done';
+    ms.currentIndex++;
+
+    // Check if there are more stops
+    if (ms.currentIndex >= ms.stops.length) {
+        showNotification('🎉 You have reached your final destination!', 'success');
+        document.getElementById('msArrivedSection').style.display = 'none';
+        msRenderProgress();
+        return;
+    }
+
+    // Move to next stop
+    const nextStop = ms.stops[ms.currentIndex];
+    nextStop.status = 'current';
+    ms.active = true;
+
+    msRenderProgress();
+    showNotification(`🧭 Navigating to ${nextStop.location.name}`, 'info');
+
+    // Check if online or offline
+    if (!navigator.onLine && nextStop.cachedRoute) {
+        // Use cached route
+        document.getElementById('msOfflineBanner').style.display = 'block';
+        msDrawCachedRoute(nextStop);
+    } else {
+        // Navigate normally
+        document.getElementById('msOfflineBanner').style.display = 'none';
+        state.selectedLocation = nextStop.location;
+        await navigateToSelected();
+    }
+}
+
+function msDrawCachedRoute(stop) {
+    clearRoute();
+
+    const cached = stop.cachedRoute;
+    const coords = cached.coordinates;
+
+    state.routeLine = L.polyline(coords, {
+        color: '#2c5aa0',
+        weight: 6,
+        opacity: 0.8
+    }).addTo(state.map);
+
+    state.dashedOverlay = L.polyline(coords, {
+        color: '#ffffff',
+        weight: 6,
+        opacity: 0.6,
+        dashArray: '12, 18'
+    }).addTo(state.map);
+
+    let offset = 0;
+    state.routeAnimation = setInterval(() => {
+        offset = (offset + 1) % 30;
+        if (state.dashedOverlay && state.map.hasLayer(state.dashedOverlay)) {
+            state.dashedOverlay.setStyle({ dashOffset: -offset });
+        } else {
+            clearInterval(state.routeAnimation);
+        }
+    }, 50);
+
+    state.map.fitBounds(state.routeLine.getBounds(), {
+        padding: [80, 80],
+        maxZoom: 18
+    });
+
+    // Show route info
+    const distanceM = Math.round(cached.distance);
+    const timeMin = Math.ceil(cached.duration / 60);
+    const routeInfo = document.getElementById('routeInfo');
+    const details = document.getElementById('routeDetails');
+
+    details.innerHTML = `
+        <div class="route-summary">
+            <div class="route-stat" style="border-left-color:#2c5aa0;">
+                <strong>📏 Distance:</strong> ${distanceM < 1000 ? distanceM + ' m' : (distanceM/1000).toFixed(2) + ' km'}
+            </div>
+            <div class="route-stat" style="border-left-color:#2c5aa0;">
+                <strong>⏱️ Walking Time:</strong> ${timeMin} min
+            </div>
+            <div class="route-stat" style="border-left-color:#2c5aa0;">
+                <strong>📍 Destination:</strong> ${stop.location.name}
+            </div>
+        </div>
+        ${cached.isFallback ? `
+        <p style="color:#ea4335; font-size:13px; padding:10px; background:#fee; border-radius:6px; margin-top:8px;">
+            ⚠️ Showing direct path — offline mode.
+        </p>` : ''}
+    `;
+
+    routeInfo.classList.remove('hidden');
+    msStartArrivalCheck(stop.location);
+}
+
+// ✅ Monitor online/offline
+window.addEventListener('online', () => {
+    document.getElementById('msOfflineBanner').style.display = 'none';
+    showNotification('✅ Back online!', 'success');
+});
+
+window.addEventListener('offline', () => {
+    document.getElementById('msOfflineBanner').style.display = 'block';
+    showNotification('📵 Offline — cached routes still available', 'warning');
+});
 
 // Initialize on load
 document.addEventListener('DOMContentLoaded', init);
