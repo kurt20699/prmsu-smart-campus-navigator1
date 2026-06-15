@@ -5,6 +5,7 @@
     "start_url": "./index.html",
     "display": "standalone",
     "background_color": "#ffffff",
+    "permissions": ["camera"],
     "theme_color": "#2c5aa0",
     "orientation": "portrait-primary",
     "icons": [
