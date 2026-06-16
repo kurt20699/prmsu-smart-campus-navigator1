@@ -18,9 +18,6 @@
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="style.css?v=4">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
-    
-    <meta name="mobile-web-app-capable" content="yes">
     
     <!-- Pannellum 360° Viewer -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
@@ -227,6 +224,10 @@
                                 <span class="quick-icon">📷</span>
                                 <span class="quick-text">Capture to Find My Location</span>
                             </button>
+                            <button class="quick-access-btn" onclick="generateQrCodes()">
+                                <span class="quick-icon">🖨️</span>
+                                <span class="quick-text">Print Building QR Codes</span>
+                            </button>
                         </div>
                         
                         <!-- Map Style -->
@@ -278,6 +279,95 @@
                                 <span>🎯</span>
                             </button>
                         </div>
+                        
+                        <!-- QR Scanner Modal -->
+                        <div id="qrScannerModal" style="
+                            display: none;
+                            position: fixed;
+                            inset: 0;
+                            background: rgba(0,0,0,0.85);
+                            z-index: 9999;
+                            flex-direction: column;
+                            align-items: center;
+                            justify-content: center;
+                        ">
+                            <div style="
+                                background: white;
+                                border-radius: 16px;
+                                width: min(360px, 92vw);
+                                overflow: hidden;
+                            ">
+                                <div style="
+                                    background: #1e5b7a;
+                                    padding: 14px 16px;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: space-between;
+                                ">
+                                    <span style="color:white; font-weight:600; font-size:14px;">📷 Scan Building QR Code</span>
+                                    <button onclick="closeQrScanner()" style="
+                                        background: rgba(255,255,255,0.2);
+                                        border: none;
+                                        color: white;
+                                        border-radius: 6px;
+                                        padding: 4px 10px;
+                                        cursor: pointer;
+                                        font-size: 13px;
+                                    ">✕</button>
+                                </div>
+                        
+                                <!-- Camera viewfinder -->
+                                <div style="position: relative; background: #111; height: 260px; display: flex; align-items: center; justify-content: center;">
+                                    <video id="qrVideo" style="width:100%; height:100%; object-fit:cover;" playsinline></video>
+                                    <!-- Corner guides overlay -->
+                                    <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;">
+                                        <div style="position:relative; width:180px; height:180px;">
+                                            <div style="position:absolute; top:0; left:0; width:28px; height:28px; border-top:3px solid #4fc3f7; border-left:3px solid #4fc3f7; border-radius:2px 0 0 0;"></div>
+                                            <div style="position:absolute; top:0; right:0; width:28px; height:28px; border-top:3px solid #4fc3f7; border-right:3px solid #4fc3f7; border-radius:0 2px 0 0;"></div>
+                                            <div style="position:absolute; bottom:0; left:0; width:28px; height:28px; border-bottom:3px solid #4fc3f7; border-left:3px solid #4fc3f7; border-radius:0 0 0 2px;"></div>
+                                            <div style="position:absolute; bottom:0; right:0; width:28px; height:28px; border-bottom:3px solid #4fc3f7; border-right:3px solid #4fc3f7; border-radius:0 0 2px 0;"></div>
+                                            <div id="qrScanLine" style="position:absolute; top:0; left:4px; right:4px; height:2px; background:#4fc3f7; opacity:0.9;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                        
+                                <div style="padding: 14px 16px;">
+                                    <p id="qrStatusText" style="font-size:13px; color:#555; text-align:center; margin:0 0 10px;">
+                                        Point camera at the QR code on the building entrance
+                                    </p>
+                                    <button onclick="closeQrScanner()" style="
+                                        width:100%;
+                                        padding: 10px;
+                                        background: white;
+                                        color: #1e5b7a;
+                                        border: 1.5px solid #1e5b7a;
+                                        border-radius: 8px;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        cursor: pointer;
+                                    ">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Location Confirmed Toast -->
+                        <div id="qrSuccessBanner" style="
+                            display: none;
+                            position: fixed;
+                            bottom: 140px;
+                            left: 50%;
+                            transform: translateX(-50%);
+                            background: #1b5e20;
+                            color: white;
+                            border-radius: 12px;
+                            padding: 12px 20px;
+                            font-size: 13px;
+                            font-weight: 600;
+                            z-index: 9998;
+                            text-align: center;
+                            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+                            min-width: 220px;
+                        "></div>
 
                         <div id="navModeSwitcher" class="nav-mode-switcher hidden">
                             <button id="navModeMap" class="nav-mode-btn">View Map</button>
@@ -468,32 +558,22 @@
         <span class="menu-icon"></span>
         <span class="menu-icon"></span>
         <span class="menu-icon"></span>
-    </button>
-    
-        <!-- QR Scanner Modal -->
-    <div id="qrScannerModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:9999; flex-direction:column; align-items:center; justify-content:center;">
-        <div style="background:white; border-radius:16px; padding:20px; width:90%; max-width:380px; text-align:center;">
-            <h3 style="margin-bottom:8px; color:#1e5b7a;">📷 Scan QR Code</h3>
-            <p style="font-size:13px; color:#666; margin-bottom:16px;">Point your camera at a QR code posted at any building entrance</p>
-            <div id="qrScannerView" style="width:100%; border-radius:12px; overflow:hidden;"></div>
-            <button onclick="closeQrScanner()" style="margin-top:16px; padding:10px 28px; background:#1e5b7a; color:white; border:none; border-radius:8px; font-size:14px; cursor:pointer;">Cancel</button>
-        </div>
-    </div>
+</button>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- Leaflet Routing Machine -->
     <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
     <script src="script.js?v=4"></script>
     
     <script>
-            if ('serviceWorker' in navigator) {
-                window.addEventListener('load', () => {
-                    navigator.serviceWorker.register('./service-worker.js?v=3')
-                        .then(reg => console.log('Service Worker registered:', reg.scope))
-                        .catch(err => console.error('Service Worker failed:', err));
-                });
-            }
-        </script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./service-worker.js?v=3')
+                    .then(reg => console.log('Service Worker registered:', reg.scope))
+                    .catch(err => console.error('Service Worker failed:', err));
+            });
+        }
+    </script>
     
+</body>
 </html>

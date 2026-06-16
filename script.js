@@ -720,7 +720,7 @@ const campusData = {
                     {id: 101, name: "GS Dean’s Office", coords: [15.31898, 119.98381], floor: "Ground Floor", iconOffset: [0, 0] },
                     {id: 102, name: "GE Staff Office", coords: [15.31882, 119.98368], floor: "Ground Floor", iconOffset: [0, 0] },
 
-                    {id: 103, name: "BS Criminology Faculty Office", coords: [15.31914, 119.98368], floor: "Ground Floor, iconOffset: [0, 0]" },
+                    {id: 103, name: "BS Criminology Faculty Office", coords: [15.31914, 119.98368], floor: "Ground Floor", iconOffset: [0, 0] },
                     {id: 104, name: "Lombroso Room", coords: [15.31918, 119.98362], floor: "Ground Floor", iconOffset: [0, 0] },
                     {id: 105, name: "Beccaria Room", coords: [15.31922, 119.98356], floor: "Ground Floor", iconOffset: [0, 0] },
                 ]
@@ -2411,6 +2411,208 @@ function showNotification(message, type = 'info') {
     }, 3000);
 }
 
+// ============================================
+// 📷 QR CODE SCANNER — Capture to Find Location
+// ============================================
+
+let _qrScanInterval = null;
+let _qrScanLineDir = 1;
+let _qrScanLinePos = 0;
+let _qrAnimFrame = null;
+
+function openQrScanner() {
+    const modal = document.getElementById('qrScannerModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    document.getElementById('qrStatusText').textContent = 'Point camera at the QR code on the building entrance';
+    document.getElementById('qrStatusText').style.color = '#555';
+    startQrCamera();
+    animateScanLine();
+}
+
+function closeQrScanner() {
+    const modal = document.getElementById('qrScannerModal');
+    if (modal) modal.style.display = 'none';
+    stopQrCamera();
+    if (_qrAnimFrame) {
+        cancelAnimationFrame(_qrAnimFrame);
+        _qrAnimFrame = null;
+    }
+}
+
+function animateScanLine() {
+    const line = document.getElementById('qrScanLine');
+    if (!line) return;
+    _qrScanLinePos += _qrScanLineDir * 2;
+    if (_qrScanLinePos >= 176) _qrScanLineDir = -1;
+    if (_qrScanLinePos <= 0) _qrScanLineDir = 1;
+    line.style.top = _qrScanLinePos + 'px';
+    _qrAnimFrame = requestAnimationFrame(animateScanLine);
+}
+
+async function startQrCamera() {
+    const video = document.getElementById('qrVideo');
+    if (!video) return;
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' }
+        });
+        video.srcObject = stream;
+        video.play();
+
+        // Load jsQR library dynamically
+        if (!window.jsQR) {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+            script.onload = () => startQrScanning(video);
+            document.head.appendChild(script);
+        } else {
+            startQrScanning(video);
+        }
+    } catch (err) {
+        document.getElementById('qrStatusText').textContent = '❌ Camera access denied. Please allow camera permission.';
+        document.getElementById('qrStatusText').style.color = '#ea4335';
+    }
+}
+
+function startQrScanning(video) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    _qrScanInterval = setInterval(() => {
+        if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = window.jsQR(imageData.data, imageData.width, imageData.height);
+
+        if (code) {
+            clearInterval(_qrScanInterval);
+            handleQrResult(code.data);
+        }
+    }, 300);
+}
+
+function stopQrCamera() {
+    if (_qrScanInterval) {
+        clearInterval(_qrScanInterval);
+        _qrScanInterval = null;
+    }
+    const video = document.getElementById('qrVideo');
+    if (video && video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
+    }
+}
+
+function handleQrResult(data) {
+    // Expected QR format: PRMSU:BUILDING_ID:FLOOR
+    // Example: PRMSU:1:Ground Floor
+    try {
+        const parts = data.split(':');
+        if (parts[0] !== 'PRMSU' || !parts[1]) {
+            showQrError('Invalid QR code. Please scan a PRMSU building QR code.');
+            return;
+        }
+
+        const buildingId = parseInt(parts[1]);
+        const floor = parts[2] || 'Ground Floor';
+        const campus = campusData[state.currentCampus];
+        const building = campus.locations.find(l => l.id === buildingId);
+
+        if (!building) {
+            showQrError('Building not found. Please try again.');
+            return;
+        }
+
+        // Set user location to building coords
+        const coords = normalizeCoords(building.coords);
+        if (!coords) return;
+
+        state.userLocation = { lat: coords[0], lng: coords[1] };
+        updateUserLocationMarker(coords[0], coords[1], null, { pan: true });
+
+        closeQrScanner();
+        showQrSuccess(building.name, floor);
+
+    } catch (err) {
+        showQrError('Could not read QR code. Please try again.');
+    }
+}
+
+function showQrError(message) {
+    const statusText = document.getElementById('qrStatusText');
+    if (statusText) {
+        statusText.textContent = '❌ ' + message;
+        statusText.style.color = '#ea4335';
+    }
+    // Restart scanning after 2 seconds
+    setTimeout(() => {
+        if (statusText) {
+            statusText.textContent = 'Point camera at the QR code on the building entrance';
+            statusText.style.color = '#555';
+        }
+        const video = document.getElementById('qrVideo');
+        if (video) startQrScanning(video);
+    }, 2000);
+}
+
+function showQrSuccess(buildingName, floor) {
+    const banner = document.getElementById('qrSuccessBanner');
+    if (!banner) return;
+    banner.innerHTML = `✅ Location set!<br><span style="font-size:12px; opacity:0.9;">${buildingName} — ${floor}</span>`;
+    banner.style.display = 'block';
+    showNotification(`📍 Location set to ${buildingName}`, 'success');
+    setTimeout(() => {
+        banner.style.display = 'none';
+    }, 4000);
+}
+
+// ============================================
+// 📄 QR CODE GENERATOR — for printing
+// ============================================
+
+function generateQrCodes() {
+    const campus = campusData[state.currentCampus];
+    const win = window.open('', '_blank');
+
+    const qrCards = campus.locations.map(loc => `
+        <div style="
+            display: inline-block;
+            width: 200px;
+            margin: 12px;
+            padding: 16px;
+            border: 2px solid #1e5b7a;
+            border-radius: 12px;
+            text-align: center;
+            font-family: sans-serif;
+            vertical-align: top;
+        ">
+            <div style="font-size:12px; font-weight:700; color:#1e5b7a; margin-bottom:8px;">${loc.name}</div>
+            <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=PRMSU:${loc.id}:Ground+Floor" 
+                 width="150" height="150" alt="QR for ${loc.name}"/>
+            <div style="font-size:11px; color:#666; margin-top:8px;">PRMSU:${loc.id}:Ground Floor</div>
+        </div>
+    `).join('');
+
+    win.document.write(`
+        <html>
+        <head><title>PRMSU Building QR Codes</title></head>
+        <body style="padding:20px; background:white;">
+            <h1 style="font-family:sans-serif; color:#1e5b7a; text-align:center;">PRMSU Campus Building QR Codes</h1>
+            <p style="font-family:sans-serif; text-align:center; color:#666;">Print and post at each building entrance</p>
+            <div style="text-align:center;">${qrCards}</div>
+        </body>
+        </html>
+    `);
+    win.document.close();
+    win.print();
+}
+
 // Map Initialization
 function initializeMap() {
     const campus = campusData[state.currentCampus];
@@ -2994,7 +3196,6 @@ function handleSearch() {
                 subtitle: building.type
             });
         }
-        
         // Search room names - FIX: Check if rooms exist and is array
         if (building.rooms && Array.isArray(building.rooms) && building.rooms.length > 0) {
             building.rooms.forEach(room => {
@@ -4427,65 +4628,6 @@ function handleQuickAction(action) {
     }
 }
 
-let html5QrScanner = null;
-
-function openQrScanner() {
-    document.getElementById('qrScannerModal').style.display = 'flex';
-
-    html5QrScanner = new Html5Qrcode("qrScannerView");
-    html5QrScanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 220, height: 220 } },
-        (decodedText) => {
-            alert('Scanned: ' + decodedText); // ← temporary debug
-            handleQrResult(decodedText);
-        },
-        (error) => { /* ignore scan errors */ }
-    );
-}
-
-function closeQrScanner() {
-    if (html5QrScanner) {
-        html5QrScanner.stop().then(() => {
-            html5QrScanner.clear();
-            html5QrScanner = null;
-        });
-    }
-    document.getElementById('qrScannerModal').style.display = 'none';
-}
-
-function handleQrResult(text) {
-    closeQrScanner();
-
-    try {
-        const data = JSON.parse(text);
-        const campus = campusData[data.campus];
-        if (!campus) throw new Error("Unknown campus");
-
-        const location = campus.locations.find(l => l.id === data.buildingId);
-        if (!location) throw new Error("Unknown building");
-
-        // Switch campus if needed
-        if (data.campus !== state.currentCampus) {
-            switchCampus(data.campus);
-        }
-
-        // Set user location to scanned building
-        state.userLocation = { ...location.coords };
-        map.setView([location.coords.lat, location.coords.lng], 19);
-
-        showNotification(`📍 You are at: ${location.name}${data.floor ? ' — ' + data.floor : ''}`, 'success');
-
-        // Optional: highlight the building on map
-        if (state.selectedBuilding?.id !== location.id) {
-            selectBuilding(location);
-        }
-
-    } catch (e) {
-        showNotification('❌ Invalid QR code. Please try again.', 'error');
-    }
-}
-
 function setUserLocation() {
     if (!navigator.geolocation) {
         showNotification('Geolocation is not supported by your browser', 'error');
@@ -4902,6 +5044,27 @@ async function msAddStopDirect(item) {
     msRenderProgress();
 }
 
+async function msAddStop(locationId) {
+    const campus = campusData[state.currentCampus];
+    const location = campus.locations.find(l => l.id === locationId);
+    if (!location) return;
+
+    // Add to stops list as pending
+    state.multiStop.stops.push({
+        location,
+        status: 'pending',
+        cachedRoute: null
+    });
+
+    msCloseAddStop();
+    showNotification(`📍 ${location.name} added as next stop`, 'success');
+
+    // Pre-cache the route immediately
+    await msCacheRoute(location, state.multiStop.stops.length - 1);
+
+    msRenderProgress();
+}
+
 async function msCacheRoute(destination, stopIndex) {
     let startCoords;
 
@@ -5161,5 +5324,39 @@ window.addEventListener('offline', () => {
     showNotification('📵 Offline — cached routes still available', 'warning');
 });
 
-// Initialize on load
-document.addEventListener('DOMContentLoaded', init);
+
+function showSavedLocations() {
+    if (state.savedLocations.length === 0) {
+        showNotification('No saved locations yet!');
+        return;
+    }
+    
+    const resultsDiv = document.getElementById('searchResults');
+    resultsDiv.innerHTML = '<div class="search-result-item" style="font-weight: bold; background: #f0f7ff;">⭐ Saved Locations</div>';
+    
+    state.savedLocations.forEach(loc => {
+        const item = document.createElement('div');
+        item.className = 'search-result-item';
+        item.innerHTML = `
+            <span class="result-name">${loc.name}</span>
+            <span class="result-type">${loc.type}</span>
+        `;
+        item.addEventListener('click', () => {
+            showLocationDetails(loc);
+            state.map.setView(loc.coords, 18);
+            resultsDiv.classList.add('hidden');
+        });
+        resultsDiv.appendChild(item);
+    });
+    
+    resultsDiv.classList.remove('hidden');
+}
+// Auto-start the app
+document.addEventListener('DOMContentLoaded', () => {
+    const session = getAuthSession();
+    if (session) {
+        startAppAfterAuth();
+    } else {
+        init();
+    }
+});
