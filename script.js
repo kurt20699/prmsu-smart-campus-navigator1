@@ -2451,31 +2451,55 @@ function animateScanLine() {
 }
 
 async function startQrCamera() {
-    const video = document.getElementById('qrVideo');
-    if (!video) return;
-
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment' }
-        });
-        video.srcObject = stream;
-        video.play();
-
-        // Load jsQR library dynamically
-        if (!window.jsQR) {
-            const script = document.createElement('script');
-            script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
-            script.onload = () => startQrScanning(video);
-            document.head.appendChild(script);
-        } else {
-            startQrScanning(video);
-        }
-    } catch (err) {
-        document.getElementById('qrStatusText').textContent = '❌ Camera access denied. Please allow camera permission.';
-        document.getElementById('qrStatusText').style.color = '#ea4335';
+    // Load jsQR first
+    if (!window.jsQR) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+        document.head.appendChild(script);
+        await new Promise(resolve => script.onload = resolve);
     }
-}
 
+    // Use native file input instead of getUserMedia
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.capture = 'environment'; // opens rear camera directly
+
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const statusText = document.getElementById('qrStatusText');
+        if (statusText) {
+            statusText.textContent = '🔍 Reading QR code...';
+            statusText.style.color = '#1e5b7a';
+        }
+
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = window.jsQR(imageData.data, imageData.width, imageData.height);
+
+            if (code) {
+                handleQrResult(code.data);
+            } else {
+                if (statusText) {
+                    statusText.textContent = '❌ No QR code found. Please try again.';
+                    statusText.style.color = '#ea4335';
+                }
+            }
+            URL.revokeObjectURL(img.src);
+        };
+        img.src = URL.createObjectURL(file);
+    };
+
+    input.click();
+}
 function startQrScanning(video) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -2501,11 +2525,6 @@ function stopQrCamera() {
     if (_qrScanInterval) {
         clearInterval(_qrScanInterval);
         _qrScanInterval = null;
-    }
-    const video = document.getElementById('qrVideo');
-    if (video && video.srcObject) {
-        video.srcObject.getTracks().forEach(t => t.stop());
-        video.srcObject = null;
     }
 }
 
