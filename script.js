@@ -2451,55 +2451,65 @@ function animateScanLine() {
 }
 
 async function startQrCamera() {
-    // Load jsQR first
-    if (!window.jsQR) {
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
-        document.head.appendChild(script);
-        await new Promise(resolve => script.onload = resolve);
-    }
+    const video = document.getElementById('qrVideo');
+    if (!video) return;
 
-    // Use native file input instead of getUserMedia
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.capture = 'environment'; // opens rear camera directly
+    const statusText = document.getElementById('qrStatusText');
 
-    input.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+    try {
+        // Load ZXing library
+        if (!window.ZXing) {
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/@zxing/library@latest/umd/index.min.js';
+            document.head.appendChild(script);
+            await new Promise((resolve, reject) => {
+                script.onload = resolve;
+                script.onerror = reject;
+            });
+        }
 
-        const statusText = document.getElementById('qrStatusText');
+        const codeReader = new window.ZXing.BrowserQRCodeReader();
+        window._zxingReader = codeReader;
+
+        // Get available cameras
+        const devices = await codeReader.getVideoInputDevices();
+        
+        // Prefer rear camera
+        const rearCamera = devices.find(d => 
+            d.label.toLowerCase().includes('back') || 
+            d.label.toLowerCase().includes('rear') ||
+            d.label.toLowerCase().includes('environment')
+        ) || devices[devices.length - 1] || devices[0];
+
+        if (!rearCamera) {
+            throw new Error('No camera found');
+        }
+
         if (statusText) {
-            statusText.textContent = '🔍 Reading QR code...';
+            statusText.textContent = 'Camera ready — point at QR code';
             statusText.style.color = '#1e5b7a';
         }
 
-        const img = new Image();
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = window.jsQR(imageData.data, imageData.width, imageData.height);
-
-            if (code) {
-                handleQrResult(code.data);
-            } else {
-                if (statusText) {
-                    statusText.textContent = '❌ No QR code found. Please try again.';
-                    statusText.style.color = '#ea4335';
+        await codeReader.decodeFromVideoDevice(
+            rearCamera.deviceId,
+            'qrVideo',
+            (result, err) => {
+                if (result) {
+                    codeReader.reset();
+                    handleQrResult(result.getText());
                 }
             }
-            URL.revokeObjectURL(img.src);
-        };
-        img.src = URL.createObjectURL(file);
-    };
+        );
 
-    input.click();
+    } catch (err) {
+        console.error('ZXing error:', err);
+        if (statusText) {
+            statusText.textContent = '❌ Camera not available. Make sure you allowed camera access.';
+            statusText.style.color = '#ea4335';
+        }
+    }
 }
+
 function startQrScanning(video) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -2525,6 +2535,15 @@ function stopQrCamera() {
     if (_qrScanInterval) {
         clearInterval(_qrScanInterval);
         _qrScanInterval = null;
+    }
+    if (window._zxingReader) {
+        window._zxingReader.reset();
+        window._zxingReader = null;
+    }
+    const video = document.getElementById('qrVideo');
+    if (video && video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
     }
 }
 
